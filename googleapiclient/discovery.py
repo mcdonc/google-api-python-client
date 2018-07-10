@@ -692,6 +692,8 @@ class ResourceMethodParameters(object):
           self.query_params.remove(name)
 
 
+_METHOD_CACHE = {}
+          
 def createMethod(methodName, methodDesc, rootDesc, schema):
   """Creates a method for attaching to a Resource.
 
@@ -706,6 +708,18 @@ def createMethod(methodName, methodDesc, rootDesc, schema):
   (pathUrl, httpMethod, methodId, accept,
    maxSize, mediaPathUrl) = _fix_up_method_description(methodDesc, rootDesc, schema)
 
+  cache_params = (
+    methodName,
+    pathUrl,
+    httpMethod,
+    methodId,
+    ' '.join(accept),
+    maxSize,
+    mediaPathUrl
+  )
+  vals = _METHOD_CACHE.get(cache_params)
+  if vals is not None:
+    return vals
   parameters = ResourceMethodParameters(methodDesc)
 
   def method(self, **kwargs):
@@ -927,6 +941,7 @@ def createMethod(methodName, methodDesc, rootDesc, schema):
       docs.append(schema.prettyPrintSchema(methodDesc['response']))
 
   setattr(method, '__doc__', ''.join(docs))
+  _METHOD_CACHE[cache_params] = (methodName, method)
   return (methodName, method)
 
 
