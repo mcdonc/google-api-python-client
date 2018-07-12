@@ -693,7 +693,63 @@ class ResourceMethodParameters(object):
 
 
 _METHOD_CACHE = {}
+
+def _flatten(container):
+  # useful only to generate a cache key
+  L = []
+  if isinstance(container, dict):
+    for k, v in sorted(six.iteritems(container)):
+      v = _flatten(v)
+      L.append((k, v))
+  elif isinstance(container, (list, tuple)):
+    for item in container:
+      v = _flatten(item)
+      L.append(v)
+  elif isinstance(container, six.string_types) or isinstance(container, six.binary_type) or container in (None, True, False):
+    return container # scalar
+  elif isinstance(container, Schemas):
+    return _flatten(container.schemas)
+  else:
+    raise ValueError(container)
+  return tuple(L)
           
+
+def createResourceMethod(methodName, methodDesc, rootDesc, schema):
+  """Create a method on the Resource to access a nested Resource.
+
+  Args:
+    methodName: string, name of the method to use.
+    methodDesc: object, fragment of deserialized discovery document that
+      describes the method.
+  """
+  methodName = fix_method_name(methodName)
+
+  cache_params = (
+    'resourcemethod',
+    methodName,
+    _flatten(methodDesc),
+    _flatten(rootDesc),
+    _flatten(schema),
+  )
+
+  vals = _METHOD_CACHE.get(cache_params)
+  if vals is not None:
+    return vals
+  
+  def methodResource(self):
+    return Resource(http=self._http, baseUrl=self._baseUrl,
+                    model=self._model, developerKey=self._developerKey,
+                    requestBuilder=self._requestBuilder,
+                    resourceDesc=methodDesc, rootDesc=rootDesc,
+                    schema=schema)
+
+  setattr(methodResource, '__doc__', 'A collection resource.')
+  setattr(methodResource, '__is_resource__', True)
+
+  _METHOD_CACHE[cache_params] = (methodName, methodResource)
+  return (methodName, methodResource)
+
+
 def createMethod(methodName, methodDesc, rootDesc, schema):
   """Creates a method for attaching to a Resource.
 
@@ -709,14 +765,13 @@ def createMethod(methodName, methodDesc, rootDesc, schema):
    maxSize, mediaPathUrl) = _fix_up_method_description(methodDesc, rootDesc, schema)
 
   cache_params = (
+    'method',
     methodName,
-    pathUrl,
-    httpMethod,
-    methodId,
-    ' '.join(accept),
-    maxSize,
-    mediaPathUrl
+    _flatten(methodDesc),
+    _flatten(rootDesc),
+    _flatten(schema),
   )
+
   vals = _METHOD_CACHE.get(cache_params)
   if vals is not None:
     return vals
@@ -1113,30 +1168,10 @@ class Resource(object):
     # Add in nested resources
     if 'resources' in resourceDesc:
 
-      def createResourceMethod(methodName, methodDesc):
-        """Create a method on the Resource to access a nested Resource.
-
-        Args:
-          methodName: string, name of the method to use.
-          methodDesc: object, fragment of deserialized discovery document that
-            describes the method.
-        """
-        methodName = fix_method_name(methodName)
-
-        def methodResource(self):
-          return Resource(http=self._http, baseUrl=self._baseUrl,
-                          model=self._model, developerKey=self._developerKey,
-                          requestBuilder=self._requestBuilder,
-                          resourceDesc=methodDesc, rootDesc=rootDesc,
-                          schema=schema)
-
-        setattr(methodResource, '__doc__', 'A collection resource.')
-        setattr(methodResource, '__is_resource__', True)
-
-        return (methodName, methodResource)
-
       for methodName, methodDesc in six.iteritems(resourceDesc['resources']):
-        fixedMethodName, method = createResourceMethod(methodName, methodDesc)
+        fixedMethodName, method = createResourceMethod(
+          methodName, methodDesc, rootDesc, schema
+        )
         self._set_dynamic_attr(fixedMethodName,
                                method.__get__(self, self.__class__))
 
