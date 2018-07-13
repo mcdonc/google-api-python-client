@@ -19,6 +19,8 @@ A client library for Google's discovery based APIs.
 from __future__ import absolute_import
 import hashlib
 import six
+import time
+
 from six.moves import zip
 
 __author__ = 'jcgregorio@google.com (Joe Gregorio)'
@@ -693,7 +695,27 @@ class ResourceMethodParameters(object):
           self.query_params.remove(name)
 
 
-_METHOD_CACHE = {}
+class _MethodCache(object):
+  def __init__(self, max_secs=3600):
+    self.cache = {}
+    self.last = time.time()
+    self.max_secs = max_secs
+
+  def get(self, key):
+    if time.time() - self.last > self.max_secs:
+      self.last = time.time()
+      self.cache = {}
+      return None
+    val = self.cache.get(key, None)
+    if val is None:
+      return None
+    self.last = time.time()
+    return val
+
+  def set(self, key, val):
+    self.cache[key] = val
+
+_METHOD_CACHE = _MethodCache()
 
 def _generate_cache_key(container, h=None):
   # presumes everything can be json-serialized
@@ -733,7 +755,7 @@ def createResourceMethod(methodName, methodDesc, rootDesc, schema):
   setattr(methodResource, '__doc__', 'A collection resource.')
   setattr(methodResource, '__is_resource__', True)
 
-  _METHOD_CACHE[cache_params] = (methodName, methodResource)
+  _METHOD_CACHE.set(cache_params, (methodName, methodResource))
   return (methodName, methodResource)
 
 
@@ -983,7 +1005,7 @@ def createMethod(methodName, methodDesc, rootDesc, schema):
       docs.append(schema.prettyPrintSchema(methodDesc['response']))
 
   setattr(method, '__doc__', ''.join(docs))
-  _METHOD_CACHE[cache_params] = (methodName, method)
+  _METHOD_CACHE.set(cache_params, (methodName, method))
   return (methodName, method)
 
 
