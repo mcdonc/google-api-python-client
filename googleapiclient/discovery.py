@@ -708,8 +708,7 @@ def _flatten(container, h=None):
   elif ( isinstance(container, six.string_types) or
          isinstance(container, six.binary_type) or
          container in (None, True, False) ):
-    return h.update(repr(container))
-    raise ValueError(container)
+    h.update(repr(container))
   return h.hexdigest()
 
 def createResourceMethod(methodName, methodDesc, rootDesc, schema):
