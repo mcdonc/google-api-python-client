@@ -1541,5 +1541,19 @@ class Test__generate_cache_key(unittest.TestCase):
         'with %s as container' % repr(container)
       )
 
+class Test_MethodCache(unittest.TestCase):
+  def _makeOne(self):
+    from googleapiclient.discovery import _MethodCache
+    return _MethodCache()
+
+  def test_set_and_get(self):
+    inst = self._makeOne()
+    inst.set('a', 'b')
+    self.assertEqual(inst.get('a'), 'b')
+    self.assertNotEqual(inst.cache, {})
+    inst.last = 0
+    self.assertEqual(inst.get('a'), None)
+    self.assertEqual(inst.cache, {})
+
 if __name__ == '__main__':
   unittest.main()

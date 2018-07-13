@@ -709,14 +709,12 @@ class _MethodCache(object):
     self.max_secs = max_secs
 
   def get(self, key):
-    last = self.last
-    self.last = time.time()
-    if time.time() - last > self.max_secs:
+    now = time.time()
+    if now - self.last > self.max_secs:
       self.cache = {}
+      self.last = now
       return None
     val = self.cache.get(key, None)
-    if val is None:
-      return None
     return val
 
   def set(self, key, val):
