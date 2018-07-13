@@ -18,6 +18,7 @@ A client library for Google's discovery based APIs.
 """
 from __future__ import absolute_import
 import six
+import md5
 from six.moves import zip
 
 __author__ = 'jcgregorio@google.com (Joe Gregorio)'
@@ -694,25 +695,22 @@ class ResourceMethodParameters(object):
 
 _METHOD_CACHE = {}
 
-def _flatten(container):
+def _flatten(container, h=None):
   # useful only to generate a cache key
-  L = []
+  if h is None:
+    h = md5.new()
   if isinstance(container, dict):
     for k, v in sorted(six.iteritems(container)):
-      v = _flatten(v)
-      L.append((k, v))
+      _flatten(v, h)
   elif isinstance(container, (list, tuple)):
     for item in container:
-      v = _flatten(item)
-      L.append(v)
-  elif isinstance(container, six.string_types) or isinstance(container, six.binary_type) or container in (None, True, False):
-    return container # scalar
-  elif isinstance(container, Schemas):
-    return _flatten(container.schemas)
-  else:
+      _flatten(item, h)
+  elif ( isinstance(container, six.string_types) or
+         isinstance(container, six.binary_type) or
+         container in (None, True, False) ):
+    return h.update(repr(container))
     raise ValueError(container)
-  return tuple(L)
-          
+  return h.hexdigest()
 
 def createResourceMethod(methodName, methodDesc, rootDesc, schema):
   """Create a method on the Resource to access a nested Resource.
@@ -729,7 +727,7 @@ def createResourceMethod(methodName, methodDesc, rootDesc, schema):
     methodName,
     _flatten(methodDesc),
     _flatten(rootDesc),
-    _flatten(schema),
+    _flatten(schema.schemas),
   )
 
   vals = _METHOD_CACHE.get(cache_params)
@@ -769,7 +767,7 @@ def createMethod(methodName, methodDesc, rootDesc, schema):
     methodName,
     _flatten(methodDesc),
     _flatten(rootDesc),
-    _flatten(schema),
+    _flatten(schema.schemas),
   )
 
   vals = _METHOD_CACHE.get(cache_params)
