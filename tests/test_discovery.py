@@ -30,6 +30,7 @@ from six.moves.urllib.parse import urlparse, parse_qs
 
 import copy
 import datetime
+import hashlib
 import httplib2
 import itertools
 import json
@@ -1516,6 +1517,29 @@ class MediaGet(unittest.TestCase):
     response = request.execute(http=http)
     self.assertEqual(b'standing in for media', response)
 
+
+class Test__generate_cache_key(unittest.TestCase):
+  vals = (
+    six.u('a'),
+    [six.u('a'), True, False, None],
+    (six.u('a'), True, False, None),
+    {'b':1, 'a':False},
+    {'a':{'b':1.2, 'a':six.u('foo'), 'd':six.u('abc')}},
+    )
+    
+  def _callFUT(self, arg):
+    from googleapiclient.discovery import _generate_cache_key
+    return _generate_cache_key(arg)
+
+  def test_types(self):
+    for container in self.vals:
+      result = self._callFUT(container)
+      self.assertEqual(
+        result,
+        hashlib.md5(
+          json.dumps(container, sort_keys=True).encode('utf-8')).hexdigest(),
+        'with %s as container' % repr(container)
+      )
 
 if __name__ == '__main__':
   unittest.main()

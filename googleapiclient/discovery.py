@@ -17,8 +17,8 @@
 A client library for Google's discovery based APIs.
 """
 from __future__ import absolute_import
+import hashlib
 import six
-import md5
 from six.moves import zip
 
 __author__ = 'jcgregorio@google.com (Joe Gregorio)'
@@ -695,21 +695,11 @@ class ResourceMethodParameters(object):
 
 _METHOD_CACHE = {}
 
-def _flatten(container, h=None):
-  # useful only to generate a cache key
-  if h is None:
-    h = md5.new()
-  if isinstance(container, dict):
-    for k, v in sorted(six.iteritems(container)):
-      _flatten(v, h)
-  elif isinstance(container, (list, tuple)):
-    for item in container:
-      _flatten(item, h)
-  elif ( isinstance(container, six.string_types) or
-         isinstance(container, six.binary_type) or
-         container in (None, True, False) ):
-    h.update(repr(container))
-  return h.hexdigest()
+def _generate_cache_key(container, h=None):
+  # presumes everything can be json-serialized
+  return hashlib.md5(
+    json.dumps(container, sort_keys=True).encode('utf-8')
+  ).hexdigest()
 
 def createResourceMethod(methodName, methodDesc, rootDesc, schema):
   """Create a method on the Resource to access a nested Resource.
@@ -724,9 +714,9 @@ def createResourceMethod(methodName, methodDesc, rootDesc, schema):
   cache_params = (
     'resourcemethod',
     methodName,
-    _flatten(methodDesc),
-    _flatten(rootDesc),
-    _flatten(schema.schemas),
+    _generate_cache_key(methodDesc),
+    _generate_cache_key(rootDesc),
+    _generate_cache_key(schema.schemas),
   )
 
   vals = _METHOD_CACHE.get(cache_params)
@@ -764,9 +754,9 @@ def createMethod(methodName, methodDesc, rootDesc, schema):
   cache_params = (
     'method',
     methodName,
-    _flatten(methodDesc),
-    _flatten(rootDesc),
-    _flatten(schema.schemas),
+    _generate_cache_key(methodDesc),
+    _generate_cache_key(rootDesc),
+    _generate_cache_key(schema.schemas),
   )
 
   vals = _METHOD_CACHE.get(cache_params)
