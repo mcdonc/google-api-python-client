@@ -694,22 +694,29 @@ class ResourceMethodParameters(object):
         if name in self.query_params:
           self.query_params.remove(name)
 
-
 class _MethodCache(object):
+  # We cache dynamic resource methods because they have a circular reference
+  # with resource instances due to the use of a descriptor.  Repeated creation
+  # of resources thus tends to create collectable garbage, which is fine, but
+  # causes the process RSS to bloat, and, on Linux at least, the memory
+  # consumed by these references is not given back to the OS due to arena
+  # management.  To avoid this, we cache the result of createMethod and
+  # createMethodResource for a little while, and dump the cache every so often.
+  # See https://github.com/google/google-api-python-client/issues/535
   def __init__(self, max_secs=3600):
     self.cache = {}
     self.last = time.time()
     self.max_secs = max_secs
 
   def get(self, key):
-    if time.time() - self.last > self.max_secs:
-      self.last = time.time()
+    last = self.last
+    self.last = time.time()
+    if time.time() - last > self.max_secs:
       self.cache = {}
       return None
     val = self.cache.get(key, None)
     if val is None:
       return None
-    self.last = time.time()
     return val
 
   def set(self, key, val):
