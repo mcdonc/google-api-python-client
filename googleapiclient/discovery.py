@@ -19,7 +19,6 @@ A client library for Google's discovery based APIs.
 from __future__ import absolute_import
 import hashlib
 import six
-import time
 
 from six.moves import zip
 
@@ -375,9 +374,11 @@ def build_from_document(
     features = service.get('features', [])
     model = JsonModel('dataWrapper' in features)
 
-  return Resource(http=http, baseUrl=base, model=model,
-                  developerKey=developerKey, requestBuilder=requestBuilder,
-                  resourceDesc=service, rootDesc=service, schema=schema)
+  return _makeResource(
+    http=http, baseUrl=base, model=model,
+    developerKey=developerKey, requestBuilder=requestBuilder,
+    resourceDesc=service, rootDesc=service, schema=schema
+  )
 
 
 def _cast(value, schema_type):
@@ -694,40 +695,6 @@ class ResourceMethodParameters(object):
         if name in self.query_params:
           self.query_params.remove(name)
 
-class _MethodCache(object):
-  # We cache dynamic resource methods because they have a circular reference
-  # with resource instances due to the use of a descriptor.  Repeated creation
-  # of resources thus tends to create collectable garbage, which is fine, but
-  # causes the process RSS to bloat, and, on Linux at least, the memory
-  # consumed by these references is not given back to the OS due to arena
-  # management.  To avoid this, we cache the result of createMethod and
-  # createMethodResource for a little while, and dump the cache every so often.
-  # See https://github.com/google/google-api-python-client/issues/535
-  def __init__(self, max_secs=3600):
-    self.cache = {}
-    self.last = time.time()
-    self.max_secs = max_secs
-
-  def get(self, key):
-    now = time.time()
-    if now - self.last > self.max_secs:
-      self.cache = {}
-      self.last = now
-      return None
-    val = self.cache.get(key, None)
-    return val
-
-  def set(self, key, val):
-    self.cache[key] = val
-
-_METHOD_CACHE = _MethodCache()
-
-def _generate_cache_key(container, h=None):
-  # presumes everything can be json-serialized
-  return hashlib.md5(
-    json.dumps(container, sort_keys=True).encode('utf-8')
-  ).hexdigest()
-
 def createResourceMethod(methodName, methodDesc, rootDesc, schema):
   """Create a method on the Resource to access a nested Resource.
 
@@ -738,29 +705,16 @@ def createResourceMethod(methodName, methodDesc, rootDesc, schema):
   """
   methodName = fix_method_name(methodName)
 
-  cache_params = (
-    'resourcemethod',
-    methodName,
-    _generate_cache_key(methodDesc),
-    _generate_cache_key(rootDesc),
-    _generate_cache_key(schema.schemas),
-  )
-
-  vals = _METHOD_CACHE.get(cache_params)
-  if vals is not None:
-    return vals
-  
   def methodResource(self):
-    return Resource(http=self._http, baseUrl=self._baseUrl,
-                    model=self._model, developerKey=self._developerKey,
-                    requestBuilder=self._requestBuilder,
-                    resourceDesc=methodDesc, rootDesc=rootDesc,
-                    schema=schema)
+    return _makeResource(http=self._http, baseUrl=self._baseUrl,
+                        model=self._model, developerKey=self._developerKey,
+                        requestBuilder=self._requestBuilder,
+                        resourceDesc=methodDesc, rootDesc=rootDesc,
+                        schema=schema)
 
   setattr(methodResource, '__doc__', 'A collection resource.')
   setattr(methodResource, '__is_resource__', True)
 
-  _METHOD_CACHE.set(cache_params, (methodName, methodResource))
   return (methodName, methodResource)
 
 
@@ -778,17 +732,6 @@ def createMethod(methodName, methodDesc, rootDesc, schema):
   (pathUrl, httpMethod, methodId, accept,
    maxSize, mediaPathUrl) = _fix_up_method_description(methodDesc, rootDesc, schema)
 
-  cache_params = (
-    'method',
-    methodName,
-    _generate_cache_key(methodDesc),
-    _generate_cache_key(rootDesc),
-    _generate_cache_key(schema.schemas),
-  )
-
-  vals = _METHOD_CACHE.get(cache_params)
-  if vals is not None:
-    return vals
   parameters = ResourceMethodParameters(methodDesc)
 
   def method(self, **kwargs):
@@ -1010,7 +953,6 @@ def createMethod(methodName, methodDesc, rootDesc, schema):
       docs.append(schema.prettyPrintSchema(methodDesc['response']))
 
   setattr(method, '__doc__', ''.join(docs))
-  _METHOD_CACHE.set(cache_params, (methodName, method))
   return (methodName, method)
 
 
@@ -1102,18 +1044,6 @@ class Resource(object):
     self._rootDesc = rootDesc
     self._schema = schema
 
-    self._set_service_methods()
-
-  def _set_dynamic_attr(self, attr_name, value):
-    """Sets an instance attribute and tracks it in a list of dynamic attributes.
-
-    Args:
-      attr_name: string; The name of the attribute to be set
-      value: The value being set on the object and tracked in the dynamic cache.
-    """
-    self._dynamic_attrs.append(attr_name)
-    self.__dict__[attr_name] = value
-
   def __getstate__(self):
     """Trim the state down to something that can be pickled.
 
@@ -1136,83 +1066,6 @@ class Resource(object):
     self._dynamic_attrs = []
     self._set_service_methods()
 
-  def _set_service_methods(self):
-    self._add_basic_methods(self._resourceDesc, self._rootDesc, self._schema)
-    self._add_nested_resources(self._resourceDesc, self._rootDesc, self._schema)
-    self._add_next_methods(self._resourceDesc, self._schema)
-
-  def _add_basic_methods(self, resourceDesc, rootDesc, schema):
-    # If this is the root Resource, add a new_batch_http_request() method.
-    if resourceDesc == rootDesc:
-      batch_uri = '%s%s' % (
-        rootDesc['rootUrl'], rootDesc.get('batchPath', 'batch'))
-      def new_batch_http_request(callback=None):
-        """Create a BatchHttpRequest object based on the discovery document.
-
-        Args:
-          callback: callable, A callback to be called for each response, of the
-            form callback(id, response, exception). The first parameter is the
-            request id, and the second is the deserialized response object. The
-            third is an apiclient.errors.HttpError exception object if an HTTP
-            error occurred while processing the request, or None if no error
-            occurred.
-
-        Returns:
-          A BatchHttpRequest object based on the discovery document.
-        """
-        return BatchHttpRequest(callback=callback, batch_uri=batch_uri)
-      self._set_dynamic_attr('new_batch_http_request', new_batch_http_request)
-
-    # Add basic methods to Resource
-    if 'methods' in resourceDesc:
-      for methodName, methodDesc in six.iteritems(resourceDesc['methods']):
-        fixedMethodName, method = createMethod(
-            methodName, methodDesc, rootDesc, schema)
-        self._set_dynamic_attr(fixedMethodName,
-                               method.__get__(self, self.__class__))
-        # Add in _media methods. The functionality of the attached method will
-        # change when it sees that the method name ends in _media.
-        if methodDesc.get('supportsMediaDownload', False):
-          fixedMethodName, method = createMethod(
-              methodName + '_media', methodDesc, rootDesc, schema)
-          self._set_dynamic_attr(fixedMethodName,
-                                 method.__get__(self, self.__class__))
-
-  def _add_nested_resources(self, resourceDesc, rootDesc, schema):
-    # Add in nested resources
-    if 'resources' in resourceDesc:
-
-      for methodName, methodDesc in six.iteritems(resourceDesc['resources']):
-        fixedMethodName, method = createResourceMethod(
-          methodName, methodDesc, rootDesc, schema
-        )
-        self._set_dynamic_attr(fixedMethodName,
-                               method.__get__(self, self.__class__))
-
-  def _add_next_methods(self, resourceDesc, schema):
-    # Add _next() methods if and only if one of the names 'pageToken' or
-    # 'nextPageToken' occurs among the fields of both the method's response
-    # type either the method's request (query parameters) or request body.
-    if 'methods' not in resourceDesc:
-      return
-    for methodName, methodDesc in six.iteritems(resourceDesc['methods']):
-      nextPageTokenName = _findPageTokenName(
-          _methodProperties(methodDesc, schema, 'response'))
-      if not nextPageTokenName:
-        continue
-      isPageTokenParameter = True
-      pageTokenName = _findPageTokenName(methodDesc.get('parameters', {}))
-      if not pageTokenName:
-        isPageTokenParameter = False
-        pageTokenName = _findPageTokenName(
-            _methodProperties(methodDesc, schema, 'request'))
-      if not pageTokenName:
-        continue
-      fixedMethodName, method = createNextMethod(
-          methodName + '_next', pageTokenName, nextPageTokenName,
-          isPageTokenParameter)
-      self._set_dynamic_attr(fixedMethodName,
-                             method.__get__(self, self.__class__))
 
 
 def _findPageTokenName(fields):
@@ -1246,3 +1099,93 @@ def _methodProperties(methodDesc, schema, name):
   if '$ref' in desc:
     desc = schema.get(desc['$ref'], {})
   return desc.get('properties', {})
+
+def _generate_cache_key(container, h=None):
+  # presumes everything can be json-serialized
+  return hashlib.md5(
+    json.dumps(container, sort_keys=True).encode('utf-8')
+  ).hexdigest()
+
+def _makeResource(
+    http,
+    baseUrl,
+    model,
+    developerKey,
+    requestBuilder,
+    resourceDesc,
+    rootDesc,
+    schema,
+  ):
+  clsname = '_'.join(
+    (
+    'resource',
+    _generate_cache_key(resourceDesc),
+    _generate_cache_key(rootDesc),
+    _generate_cache_key(schema.schemas),
+    )
+    )
+  cls = globals().get(clsname)
+  if cls is None:
+    attrdict = {}
+    if resourceDesc == rootDesc:
+      batch_uri = '%s%s' % (
+        rootDesc['rootUrl'], rootDesc.get('batchPath', 'batch'))
+      def new_batch_http_request(callback=None):
+        """Create a BatchHttpRequest object based on the discovery document.
+
+        Args:
+          callback: callable, A callback to be called for each response, of the
+            form callback(id, response, exception). The first parameter is the
+            request id, and the second is the deserialized response object. The
+            third is an apiclient.errors.HttpError exception object if an HTTP
+            error occurred while processing the request, or None if no error
+            occurred.
+
+        Returns:
+          A BatchHttpRequest object based on the discovery document.
+        """
+        return BatchHttpRequest(callback=callback, batch_uri=batch_uri)
+      attrdict['new_batch_http_request'] = new_batch_http_request
+
+    # Add basic methods
+    if 'methods' in resourceDesc:
+      for methodName, methodDesc in six.iteritems(resourceDesc['methods']):
+        fixedMethodName, method = createMethod(
+            methodName, methodDesc, rootDesc, schema)
+        attrdict[fixedMethodName] = method
+        # Add in _media methods. The functionality of the attached method will
+        # change when it sees that the method name ends in _media.
+        if methodDesc.get('supportsMediaDownload', False):
+          fixedMethodName, method = createMethod(
+              methodName + '_media', methodDesc, rootDesc, schema)
+          attrdict[fixedMethodName] = method
+        nextPageTokenName = _findPageTokenName(
+            _methodProperties(methodDesc, schema, 'response'))
+        if not nextPageTokenName:
+          continue
+        isPageTokenParameter = True
+        pageTokenName = _findPageTokenName(methodDesc.get('parameters', {}))
+        if not pageTokenName:
+          isPageTokenParameter = False
+          pageTokenName = _findPageTokenName(
+              _methodProperties(methodDesc, schema, 'request'))
+        if not pageTokenName:
+          continue
+        fixedMethodName, method = createNextMethod(
+            methodName + '_next', pageTokenName, nextPageTokenName,
+            isPageTokenParameter)
+        attrdict[fixedMethodName] = method
+    # Add in nested resources
+    if 'resources' in resourceDesc:
+
+      for methodName, methodDesc in six.iteritems(resourceDesc['resources']):
+        fixedMethodName, method = createResourceMethod(
+          methodName, methodDesc, rootDesc, schema
+        )
+        attrdict[fixedMethodName] = method
+    cls = type(clsname, (Resource,), attrdict)
+    globals()['clsname'] = cls
+  return cls(http=http, baseUrl=baseUrl, model=model,
+             developerKey=developerKey, requestBuilder=requestBuilder,
+             resourceDesc=resourceDesc, rootDesc=rootDesc, schema=schema)
+  
