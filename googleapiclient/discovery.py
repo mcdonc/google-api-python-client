@@ -1033,8 +1033,6 @@ class Resource(object):
       rootDesc: object, the entire deserialized discovery document.
       schema: object, mapping of schema names to schema descriptions.
     """
-    self._dynamic_attrs = []
-
     self._http = http
     self._baseUrl = baseUrl
     self._model = model
@@ -1043,29 +1041,6 @@ class Resource(object):
     self._resourceDesc = resourceDesc
     self._rootDesc = rootDesc
     self._schema = schema
-
-  def __getstate__(self):
-    """Trim the state down to something that can be pickled.
-
-    Uses the fact that the instance variable _dynamic_attrs holds attrs that
-    will be wiped and restored on pickle serialization.
-    """
-    state_dict = copy.copy(self.__dict__)
-    for dynamic_attr in self._dynamic_attrs:
-      del state_dict[dynamic_attr]
-    del state_dict['_dynamic_attrs']
-    return state_dict
-
-  def __setstate__(self, state):
-    """Reconstitute the state of the object from being pickled.
-
-    Uses the fact that the instance variable _dynamic_attrs holds attrs that
-    will be wiped and restored on pickle serialization.
-    """
-    self.__dict__.update(state)
-    self._dynamic_attrs = []
-    self._set_service_methods()
-
 
 
 def _findPageTokenName(fields):
@@ -1184,7 +1159,7 @@ def _makeResource(
         )
         attrdict[fixedMethodName] = method
     cls = type(clsname, (Resource,), attrdict)
-    globals()['clsname'] = cls
+    globals()[clsname] = cls
   return cls(http=http, baseUrl=baseUrl, model=model,
              developerKey=developerKey, requestBuilder=requestBuilder,
              resourceDesc=resourceDesc, rootDesc=rootDesc, schema=schema)
